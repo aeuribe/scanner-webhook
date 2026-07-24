@@ -35,7 +35,6 @@ app.post('/api/webhook/scanner', (req, res) => {
   return res.status(200).json({
     result: 'Success',
     sort_Port: sortPort,
-    label_pdf_to_base64: ''
   });
 });
 
