@@ -23,6 +23,13 @@ app.post('/api/webhook/scanner', (req, res) => {
     return res.status(400).json({ result: 'Error', message: 'hid is required' });
   }
 
+  // OCR field — optional for now, log it when present
+  if (data.ocr_text) {
+    console.log(`OCR routing code detected: ${data.ocr_text}`);
+  } else {
+    console.log('No OCR routing code in this request');
+  }
+
   const sortPort = Math.floor(Math.random() * 3) + 1;
 
   return res.status(200).json({
