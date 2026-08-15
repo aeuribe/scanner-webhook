@@ -1,4 +1,6 @@
 const express = require('express');
+const multer = require('multer'); // Agregado: Dependencia necesaria para interceptar archivos
+
 const app = express();
 
 app.use(express.json());
@@ -37,6 +39,40 @@ app.post('/api/webhook/scanner', (req, res) => {
     sort_Port: sortPort,
   });
 });
+
+// --- NUEVO ENDPOINT "ATRAPATODO" PARA FOTOS ---
+// Usamos upload.any() para aceptar cualquier archivo o campo sin saber cómo se llama
+const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } }); // Límite de 50MB por si acaso
+
+app.post('/api/webhook/upload-image-test', upload.any(), (req, res) => {
+  console.log('\n=== NUEVA PETICIÓN DE FOTOS RECIBIDA ===');
+  console.log(`Content-Type: ${req.headers['content-type']}`);
+
+  // 1. Mostrar campos de texto enviados (ej. code, tracking, etc.)
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Campos de texto (Fields/JSON):', JSON.stringify(req.body, null, 2));
+  } else {
+    console.log('Campos de texto: Ninguno detectado');
+  }
+
+  // 2. Mostrar archivos detectados
+  if (req.files && req.files.length > 0) {
+    req.files.forEach((file, index) => {
+      console.log(`Archivo [${index}]: FieldName='${file.fieldname}', FileName='${file.originalname}', MimeType='${file.mimetype}', Size=${file.size} bytes`);
+    });
+  } else {
+    console.log('Archivos adjuntos: Ninguno detectado');
+  }
+
+  console.log('=========================================\n');
+
+  // Responder 200 OK siempre para que la máquina no genere errores
+  return res.status(200).json({
+    status: 'received',
+    message: 'Payload inspected successfully'
+  });
+});
+// --- FIN DEL NUEVO ENDPOINT ---
 
 app.get('/', (req, res) => {
   res.send('Scanner Webhook — Running');
