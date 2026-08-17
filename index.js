@@ -32,7 +32,7 @@ app.post('/api/webhook/scanner', (req, res) => {
     console.log('No OCR routing code in this request');
   }
 
-  const sortPort = Math.floor(Math.random() * 3) + 1;
+  const sortPort = Math.floor(Math.random() * 6) + 1;
 
   return res.status(200).json({
     result: 'Success',
