@@ -8,7 +8,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.text({ type: 'text/*', limit: '50mb' }));
 
-// Guarda en memoria las últimas 30 lecturas para inspección en /api/webhook/logs
+// Guarda en memoria las últimas 30 lecturas completas para /api/webhook/logs
 const RECENT_LOGS = [];
 function saveLog(entry) {
   RECENT_LOGS.unshift({ timestamp: new Date().toISOString(), ...entry });
@@ -35,7 +35,7 @@ const PREFIX_ALIASES = {
 
 // Patrones verificados contra etiquetas reales:
 // 1. Códigos de 2 letras CON guion (VE-0234266, CR-1622241): detecta incluso si el OCR
-//    pegó texto antes o después ("TOCR-1622241ANA", "A24THTERVE-0234266"), bloqueando "AVE-".
+//    pegó texto antes o después ("TOCR-1622241ANA", "52AW24TTERVE-0234266"), bloqueando "AVE-".
 // 2. Códigos de 2 letras SIN guion (CR390621): permite "TO" o "TER" pegado antes.
 // 3. Alias de 1 letra "V" (V-0578342): exige inicio de palabra o prefijo de dirección
 //    ("TO", "TER", "ST", "STE", "APT", "UNIT", "FL") para no confundirse con "INV-12345".
@@ -131,29 +131,38 @@ app.post('/api/webhook/scanner', upload.any(), (req, res) => {
     size: f.size,
   }));
 
+  console.log('\n================ NUEVA LECTURA DE MÁQUINA ================');
+  console.log(`IP: ${ip} | Content-Type: ${req.headers['content-type']}`);
+  console.log('Query params:', JSON.stringify(req.query));
+  console.log('Body completo recibido:', JSON.stringify(parsedBody, null, 2));
+  if (attachedFiles.length > 0) {
+    console.log('Archivos adjuntos:', JSON.stringify(attachedFiles, null, 2));
+  }
+
   const ocrCandidate = extractOcrCandidate(data);
   const routing = resolveChute(ocrCandidate.rawValue);
 
   const decisionSummary = {
     ip,
+    contentType: req.headers['content-type'] || 'unknown',
+    receivedKeys: Object.keys(data),
     barcode,
     ocrFieldDetected: ocrCandidate.sourceField,
+    ocrRawValue: ocrCandidate.rawValue,
+    ocrEvaluatedText: routing.evaluatedText,
     matches: routing.matches,
     country: routing.country,
     reason: routing.reason,
     assignedChute: routing.chute,
-    attachedFilesCount: attachedFiles.length,
+    attachedFiles,
   };
 
-  console.log(
-    `[ROUTING] barcode=${barcode || '-'} country=${routing.country || '-'} ` +
-    `chute=${routing.chute} reason=${routing.reason} ` +
-    `matches=${JSON.stringify(routing.matches.map((m) => m.normalizedCode))}`
-  );
+  console.log('Decisión tomada:', JSON.stringify(decisionSummary, null, 2));
+  console.log('==========================================================\n');
 
   saveLog({
     fullPayload: parsedBody,
-    attachedFiles,
+    query: req.query,
     decision: decisionSummary,
   });
 
@@ -172,6 +181,19 @@ app.get('/api/webhook/logs', (req, res) => {
 });
 
 app.post('/api/webhook/upload-image-test', upload.any(), (req, res) => {
+  console.log('\n=== NUEVA PETICIÓN DE FOTOS RECIBIDA ===');
+  console.log(`Content-Type: ${req.headers['content-type']}`);
+
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Campos de texto (Fields/JSON):', JSON.stringify(req.body, null, 2));
+  }
+  if (req.files && req.files.length > 0) {
+    req.files.forEach((file, index) => {
+      console.log(`Archivo [${index}]: FieldName='${file.fieldname}', FileName='${file.originalname}', MimeType='${file.mimetype}', Size=${file.size} bytes`);
+    });
+  }
+  console.log('=========================================\n');
+
   return res.status(200).json({
     status: 'received',
     message: 'Payload inspected successfully',
@@ -188,5 +210,7 @@ if (require.main === module) {
     console.log(`Server running on port ${PORT}`);
   });
 }
+
+process.on('SIGTERM', () => process.exit(0));
 
 module.exports = { resolveChute };
