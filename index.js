@@ -20,11 +20,11 @@ function saveLog(entry) {
 // ============================================================
 
 const CHUTE_BY_COUNTRY = {
-  VE: 1, // Venezuela
-  CR: 2, // Costa Rica
+  CU: 1, // Venezuela
+  DO: 2, // Costa Rica
   GT: 3, // Guatemala
-  DO: 4, // República Dominicana
-  CU: 5, // Cuba
+  CR: 4, // República Dominicana
+  VE: 5, // Cuba
 };
 
 const MANUAL_CHUTE = 6;
