@@ -4,12 +4,11 @@ const multer = require('multer');
 const app = express();
 const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Acepta JSON, formularios URL-encoded y texto plano para no perder nada
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.text({ type: 'text/*', limit: '50mb' }));
 
-// Guarda en memoria las últimas 30 lecturas para poder verlas desde el navegador
+// Guarda en memoria las últimas 30 lecturas para inspección en /api/webhook/logs
 const RECENT_LOGS = [];
 function saveLog(entry) {
   RECENT_LOGS.unshift({ timestamp: new Date().toISOString(), ...entry });
@@ -34,16 +33,17 @@ const PREFIX_ALIASES = {
   V: 'VE',
 };
 
-const KNOWN_PREFIXES = [
-  ...Object.keys(CHUTE_BY_COUNTRY),
-  ...Object.keys(PREFIX_ALIASES),
+// Patrones verificados contra etiquetas reales:
+// 1. Códigos de 2 letras CON guion (VE-0234266, CR-1622241): detecta incluso si el OCR
+//    pegó texto antes o después ("TOCR-1622241ANA", "A24THTERVE-0234266"), bloqueando "AVE-".
+// 2. Códigos de 2 letras SIN guion (CR390621): permite "TO" o "TER" pegado antes.
+// 3. Alias de 1 letra "V" (V-0578342): exige inicio de palabra o prefijo de dirección
+//    ("TO", "TER", "ST", "STE", "APT", "UNIT", "FL") para no confundirse con "INV-12345".
+const MATCH_PATTERNS = [
+  /(?<!A)(VE|CR|GT|DO|CU)-(\d{3,8})(?!\d)/g,
+  /(?<![A-Z0-9])(?:TO|TER)?(VE|CR|GT|DO|CU)(\d{3,8})(?!\d)/g,
+  /(?<![A-Z0-9])(?:TO|TER|ST|STE|APT|UNIT|FL)?(V)-?(\d{3,8})(?!\d)/g,
 ];
-
-const sortedPrefixes = [...KNOWN_PREFIXES].sort((a, b) => b.length - a.length);
-const CODE_REGEX = new RegExp(
-  `(?<![A-Z0-9])(${sortedPrefixes.join('|')})-?(\\d{3,8})(?!\\d)`,
-  'g'
-);
 
 function normalizeOcrText(ocr) {
   if (!ocr) return '';
@@ -52,9 +52,8 @@ function normalizeOcrText(ocr) {
   return String(ocr);
 }
 
-// Extrae el texto OCR sin importar cómo lo llame la máquina
 function extractOcrCandidate(data) {
-  const possibleKeys = ['ocr_text', 'ocr', 'ocrText', 'OCR', 'text', 'ocr_result', 'ocrResult'];
+  const possibleKeys = ['ocr', 'ocr_text', 'ocrText', 'OCR', 'text', 'ocr_result', 'ocrResult'];
   for (const key of possibleKeys) {
     if (data[key] !== undefined && data[key] !== null && String(data[key]).trim() !== '') {
       return { sourceField: key, rawValue: data[key] };
@@ -71,10 +70,25 @@ function resolveChute(rawOcr) {
   }
 
   const matches = [];
-  for (const m of text.matchAll(CODE_REGEX)) {
-    const prefix = m[1];
-    const country = PREFIX_ALIASES[prefix] || prefix;
-    matches.push({ code: m[0], country });
+  const seen = new Set();
+
+  for (const regex of MATCH_PATTERNS) {
+    for (const m of text.matchAll(regex)) {
+      const prefix = m[1];
+      const digits = m[2];
+      const normalizedCode = `${prefix}-${digits}`;
+      const uniqueKey = `${m.index}:${normalizedCode}`;
+
+      if (!seen.has(uniqueKey)) {
+        seen.add(uniqueKey);
+        const country = PREFIX_ALIASES[prefix] || prefix;
+        matches.push({
+          rawMatch: m[0],
+          normalizedCode,
+          country,
+        });
+      }
+    }
   }
 
   if (matches.length === 0) {
@@ -95,11 +109,9 @@ function resolveChute(rawOcr) {
 // ENDPOINTS
 // ============================================================
 
-// upload.any() permite recibir tanto JSON puro como multipart/form-data (con o sin fotos)
 app.post('/api/webhook/scanner', upload.any(), (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-  // Si llegó como texto plano que parece JSON, intentamos parsearlo
   let parsedBody = req.body;
   if (typeof req.body === 'string') {
     try {
@@ -110,8 +122,8 @@ app.post('/api/webhook/scanner', upload.any(), (req, res) => {
   }
 
   const data = (parsedBody && parsedBody.raw) ? parsedBody.raw : (parsedBody || {});
+  const barcode = data.barcode || data.code || null;
 
-  // Resumen de archivos si la máquina adjuntó imágenes en este mismo endpoint
   const attachedFiles = (req.files || []).map((f) => ({
     fieldname: f.fieldname,
     originalname: f.originalname,
@@ -119,50 +131,32 @@ app.post('/api/webhook/scanner', upload.any(), (req, res) => {
     size: f.size,
   }));
 
-  console.log('\n================ NUEVA LECTURA DE MÁQUINA ================');
-  console.log(`IP: ${ip} | Content-Type: ${req.headers['content-type']}`);
-  console.log('Query params:', JSON.stringify(req.query));
-  console.log('Body completo recibido:', JSON.stringify(parsedBody, null, 2));
-  if (attachedFiles.length > 0) {
-    console.log('Archivos adjuntos:', JSON.stringify(attachedFiles, null, 2));
-  }
-
-  // Advertencias (sin bloquear ni estrangular la petición)
-  const warnings = [];
-  if (!data.code) warnings.push('missing_code');
-  if (!data.weight || Number(data.weight) <= 0) warnings.push('missing_or_zero_weight');
-  if (!data.hid) warnings.push('missing_hid');
-
-  // Buscamos el campo OCR y decidimos el chute
   const ocrCandidate = extractOcrCandidate(data);
   const routing = resolveChute(ocrCandidate.rawValue);
 
   const decisionSummary = {
     ip,
-    contentType: req.headers['content-type'] || 'unknown',
-    receivedKeys: Object.keys(data),
-    warnings,
+    barcode,
     ocrFieldDetected: ocrCandidate.sourceField,
-    ocrRawValue: ocrCandidate.rawValue,
-    ocrEvaluatedText: routing.evaluatedText,
     matches: routing.matches,
     country: routing.country,
     reason: routing.reason,
     assignedChute: routing.chute,
-    attachedFiles,
+    attachedFilesCount: attachedFiles.length,
   };
 
-  console.log('Decisión tomada:', JSON.stringify(decisionSummary, null, 2));
-  console.log('==========================================================\n');
+  console.log(
+    `[ROUTING] barcode=${barcode || '-'} country=${routing.country || '-'} ` +
+    `chute=${routing.chute} reason=${routing.reason} ` +
+    `matches=${JSON.stringify(routing.matches.map((m) => m.normalizedCode))}`
+  );
 
   saveLog({
     fullPayload: parsedBody,
-    query: req.query,
+    attachedFiles,
     decision: decisionSummary,
   });
 
-  // Siempre responde 200 con sort_Port para que la máquina no se trabe,
-  // e incluye "debug_info" para inspección.
   return res.status(200).json({
     result: 'Success',
     sort_Port: routing.chute,
@@ -170,7 +164,6 @@ app.post('/api/webhook/scanner', upload.any(), (req, res) => {
   });
 });
 
-// --- VISOR EN VIVO DESDE EL NAVEGADOR / TELÉFONO ---
 app.get('/api/webhook/logs', (req, res) => {
   res.status(200).json({
     total_stored: RECENT_LOGS.length,
@@ -178,27 +171,7 @@ app.get('/api/webhook/logs', (req, res) => {
   });
 });
 
-// --- ENDPOINT "ATRAPATODO" PARA FOTOS ---
 app.post('/api/webhook/upload-image-test', upload.any(), (req, res) => {
-  console.log('\n=== NUEVA PETICIÓN DE FOTOS RECIBIDA ===');
-  console.log(`Content-Type: ${req.headers['content-type']}`);
-
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.log('Campos de texto (Fields/JSON):', JSON.stringify(req.body, null, 2));
-  } else {
-    console.log('Campos de texto: Ninguno detectado');
-  }
-
-  if (req.files && req.files.length > 0) {
-    req.files.forEach((file, index) => {
-      console.log(`Archivo [${index}]: FieldName='${file.fieldname}', FileName='${file.originalname}', MimeType='${file.mimetype}', Size=${file.size} bytes`);
-    });
-  } else {
-    console.log('Archivos adjuntos: Ninguno detectado');
-  }
-
-  console.log('=========================================\n');
-
   return res.status(200).json({
     status: 'received',
     message: 'Payload inspected successfully',
@@ -211,7 +184,7 @@ app.get('/', (req, res) => {
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
