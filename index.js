@@ -40,9 +40,16 @@ const PREFIX_ALIASES = {
 // 3. Alias de 1 letra "V" (V-0578342): exige inicio de palabra o prefijo de dirección
 //    ("TO", "TER", "ST", "STE", "APT", "UNIT", "FL") para no confundirse con "INV-12345".
 const MATCH_PATTERNS = [
+  // 1. Prefijos de 2 letras CON guion (ej. VE-0234266, CR-1622241, GT-793)
   /(?<!A)(VE|CR|GT|DO|CU)-(\d{3,8})(?!\d)/g,
-  /(?<![A-Z0-9])(?:TO|TER)?(VE|CR|GT|DO|CU)(\d{3,8})(?!\d)/g,
-  /(?<![A-Z0-9])(?:TO|TER|ST|STE|APT|UNIT|FL)?(V)-?(\d{3,8})(?!\d)/g,
+
+  // 2. Prefijos de 2 letras SIN guion con 5 a 8 dígitos, incluso con texto pegado antes
+  //    (ej. d2A2TTERVE034266, TOCR1622241ANA), excluyendo "AVE" y "DRIVE"
+  /(?<![AI])(VE|CR|GT|DO|CU)(\d{5,8})(?!\d)/g,
+
+  // 3. Alias de 1 letra "V" (ej. V-0578342, V366): mantiene límite estricto
+  //    para no confundirse con palabras como "INV-12345"
+  /(?<![A-Z0-9])(?:TO|TER|TTER|ST|STE|APT|UNIT|FL)?(V)-?(\d{3,8})(?!\d)/g,
 ];
 
 function normalizeOcrText(ocr) {
