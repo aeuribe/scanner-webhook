@@ -20,9 +20,9 @@ function saveLog(entry) {
 // ============================================================
 
 const CHUTE_BY_COUNTRY = {
-  CU: 6, // Venezuela
+  CU: 3, // Venezuela
   DO: 2, // Costa Rica
-  VE: 3, // Guatemala
+  VE: 6, // Guatemala
   CR: 5, // República Dominicana
   GT: 1, // Cuba
 };
