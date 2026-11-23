@@ -27,7 +27,7 @@ const CHUTE_BY_COUNTRY = {
   GT: 1, // Cuba
 };
 
-const MANUAL_CHUTE = 6;
+const MANUAL_CHUTE = 0;
 
 const PREFIX_ALIASES = {
   V: 'VE',
